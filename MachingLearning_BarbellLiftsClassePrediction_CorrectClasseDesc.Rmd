@@ -1,0 +1,197 @@
+---
+title: "Coursera Machine Learning Project - Barbell Lifts Classe Prediction"
+author: "Betsy Nash"
+date: "March 11, 2018"
+output: html_document
+keep_md: true
+---
+
+```{r setup, include=FALSE}
+##hide warnings and messages when loading library(package)
+knitr::opts_chunk$set(echo = TRUE,warning=FALSE,message = FALSE,cache=TRUE)
+```
+
+###Synopsis
+The data from 6 participants is available to see if a prediction model can determine if the manner in which they did the unilateral dumbbell bicept curl exercise. This is the "classe" variable in the dataset. There are 5 classes: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+
+Three prediction models were used in this review.  The random forest model is determined to be the best based solely on an accuracy measure, as determined by a parsed test dataset.
+
+The data is provided from Proceedings of 21st Brazilian Symposium on Artificial Intelligence, Ugulino, W., et al, Wearable Computing: Accelerometers' Data Classification of Body Postures and Movements.
+
+###Loaded Libraries
+```{r libraries, echo=TRUE}
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(rattle)
+library(rpart)
+library(rpart.plot)
+library(randomForest)
+```
+
+###Clean & Tidy Dataset
+The training dataset is found here:
+```{r training, echo=TRUE}
+Connection<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+TrainDestFile<-"pml-training.csv"
+download.file(Connection,TrainDestFile)
+TrainData<- read.csv("pml-training.csv")
+#in the interest of document length, not displaying the structure
+#str(TrainData)
+```
+
+The following observations were made looking at the structure: many NAs & #DIV/0! error. Blanks are also a concern. Prediction algorithms fail with missing values. Therefore, create a dataset with a treatment for missing values.
+
+```{r missing, echo=TRUE}
+TrainDataUse<- read.csv("pml-training.csv",na.strings=c("NA","#DIV/0!",""))
+#check dimension unchanged
+#str(TrainDataUse)
+```
+
+With the treatment in place, now we need to identify columns with a significant amount of NA's.  A threshold of 50% is used (essentially a coin flip whether there is useable data or not).  Any column with more than 50% NA's is removed from analysis.
+```{r IssueNAs,echo=TRUE}
+#count of NAs by col using simple apply
+#In the interest of report length, it is not displayed, but here is the code
+#sapply(TrainDataUse, function(x) sum(is.na(x)))
+#identify cols with > 50% NAs
+indColToRemove <- which(colSums(is.na(TrainDataUse))>0.5*dim(TrainDataUse)[1]) 
+print(indColToRemove)
+#count = 100, now remove these columns
+TrainDataUseClean <- TrainDataUse[,-indColToRemove]
+#in the interest of report length, while not displayed, the next two lines were used to confirm 100 columns are removed
+#dim(TrainDataUseClean)
+#dim(TrainDataUse)
+```
+
+Next the data was reviewed for any obvious columns that would not be good predictors and could provide spurious results. Two columns were removed from the dataset. 
+```{r trim,echo=TRUE }
+#In the interest of report lenth, not displaying head, but it was used to determine which columns to trim.
+#head(TrainDataUseClean,10)
+#Trim: do not need cols X (rowID) or user_name. They may effect the prediction model.
+TrainDataUseCleanTrim <- TrainDataUseClean[,-c(1:2)]
+#While not displayed, the following line was used to confirm the new column count 60-2 = 58
+#dim(TrainDataUseCleanTrim)
+```
+
+A check for the outcome column, classe, is performed to make sure there are no holes/gaps to address.
+```{r ColofInt, echo = TRUE}
+UniqueClasse<-distinct(select(TrainDataUseCleanTrim, classe))
+#In the interest of report length, not showing the results. No issues identified.
+#print(UniqueClasse)
+```
+
+With the cleansing done on the training set, the next step is to explore the data for any additional adjustments.  Summary and near zero variance are reviewed.
+
+```{r explore, echo = TRUE}
+#In the interest of report length, not displaying summary. No issues found.
+#summary(TrainDataUseCleanTrim)
+#Look for near zero variance columns
+nsv<-nearZeroVar(TrainDataUseCleanTrim,saveMetrics=TRUE)
+nsv
+```
+
+The "new_window" column is TRUE for near zero variance and needs to be removed as a possible covariate.
+```{r nearzero, echo=TRUE}
+TrainDataUseCleanTrimCOV<-subset(TrainDataUseCleanTrim,select=-c(new_window))
+```
+
+For cleansing, four steps were performed to have a clean & tidy dataset for modeling:  
+1) identify what is considered a missing variable  
+2) remove columns with more than 50% NAs  
+3) removed the RowID and user_name columns  
+4) removed the new_window column due to near zero variance 
+
+
+###Parsing the Dataset into Build and Test Datasets
+A 75/25 split is used on the clean and tidy dataset.  75% for building the model. 25% for testing and determining accuracy of the models.  
+
+```{r parsing, echo = TRUE}
+#set seed to make sure same random sample each iteration
+set.seed(12345)
+InBuild <- createDataPartition(TrainDataUseCleanTrimCOV$classe, p=0.75, list=FALSE)
+BuildSet <- TrainDataUseCleanTrimCOV[InBuild,]
+TestSet <- TrainDataUseCleanTrimCOV[-InBuild,]
+#while not displayed, the following was used to confirm the split balances to the total row count
+#dim(BuildSet)
+#dim(TestSet)
+```
+
+###Machine Learning with the Caret Package
+The goal of a predictive model is to find the signal (good predictor variables).  Three models were explored in this review. Cross-validation involves a process of fitting models and testing them.
+
+1) Decision Tree
+2) Random Forest
+3) Gradient Boosting
+
+The best model is selected in this review based solely on the measure of accuracy on the test dataset.  
+
+```{r dcntree, echo = TRUE}
+#set cross validation and folds = 5
+Cntl<-trainControl(method="cv",number = 5)
+FitTree<-train(classe ~ ., data=BuildSet, method="rpart", trControl=Cntl)
+#view final model
+fancyRpartPlot(FitTree$finalModel)
+#predicting new values with test set
+TreePredict<-predict(FitTree,newdata=TestSet)
+#compare classe with the model using confusion matrix to see if it is a good fit or not
+confusionMatrix(TreePredict,TestSet$classe)
+```
+
+Decision Tree: The accuracy on the test dataset is low.  The next step is to explore the random forest model.
+
+```{r random, echo=TRUE}
+#same controls as that used in the decision tree
+FitRF<-train(classe ~ ., data=BuildSet, method="rf", trControl = Cntl, verbose = FALSE)
+print(FitRF)
+#predicting new values using best tree with test set
+RFPredict<-predict(FitRF,newdata=TestSet)
+#compare classe with the model using confusion matrix to see if it is a good fit or not
+confusionMatrix(RFPredict,TestSet$classe)
+CMRF<-confusionMatrix(RFPredict,TestSet$classe)
+```
+
+Random Forest: The accuracy on the test dataseet is very high, near 100%.  This is a very promising model.  The next step is to explore the gradient boosting method.
+
+```{r gradient, echo=TRUE}
+#same controls as earlier
+FitGBM<-train(classe~., data=BuildSet, method="gbm", trControl=Cntl, verbose=FALSE)
+print(FitGBM)
+GBMPredict<-predict(FitGBM,newdata=TestSet)
+confusionMatrix(GBMPredict,TestSet$classe)
+```
+
+Gradient Boosting: The accuracy on the test dataset is also very high, but not as high as random forest.  Therefore, the random forest model is the one selected for the prediction model.
+
+The estimated out-of-sample error should be greater than the in-sample-error.  The prediction model tunes a little bit to the noice in the build dataset. The test dataset will have different noise and the accuracy will lower a bit.  The more realistic expectation is the performance of the model on the test dataset. The estimated out-of-sample error using our selected random forest model is `r round(1-CMRF$overall[1],4)*100`%.
+
+
+###Interpretation of Results
+Based strictly on accuracy, random forest model is the best prediction algorithm. The next step is to apply it to the validation dataset provided in the assignment.  The same steps for cleaning and tidying the data in the training datset need to be applied to the validation dataset.
+
+```{r valdata, echo=TRUE}
+Connection2<-"https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+ValDestFile<-"pml-testing.csv"
+download.file(Connection2,ValDestFile)
+ValData<- read.csv("pml-testing.csv")
+dim(ValData)
+#step 1 - tell R what to consider as missing values
+ValDataUse<- read.csv("pml-testing.csv",na.strings=c("NA","#DIV/0!",""))
+#step 2 - remove same cols ID earlier with > 50% NAs
+ValDataUseClean <- ValDataUse[,-indColToRemove]
+#step 3 - trim: do not need cols X (rowID) or user_name. They may effect the prediction model.
+ValDataUseCleanTrim <- ValDataUseClean[,-c(1:2)]
+#step 4 - remove the new_window column due to near zero variance
+ValDataUseCleanTrimCOV<-subset(ValDataUseCleanTrim,select=-c(new_window))
+#should have 20 rows and 57 columns
+dim(ValDataUseCleanTrimCOV)
+```
+
+Here are the predicted classe assignments on the validation dataset based on the random forest model:
+```{r SecondQuiz, echo = TRUE}
+#Ans for 2nd quiz
+ValPred<-predict(FitRF,newdata=ValDataUseCleanTrimCOV)
+ValPred
+```
+
+
+
